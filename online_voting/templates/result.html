@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Voting Result</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+
+<div class="center-box">
+
+    <div class="login-card">
+
+        <h2>Voting Result</h2>
+        <p>Current vote count</p>
+
+        <div class="result-box">
+
+            <p><strong>RAM :</strong> {{ ram_votes }} Votes</p>
+
+            <p><strong>SURIYA :</strong> {{ suriya_votes }} Votes</p>
+
+        </div>
+
+        <p class="bottom-text">
+            <a href="/">Back to Home</a>
+        </p>
+
+    </div>
+
+</div>
+
+</body>
+</html>
