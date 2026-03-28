@@ -328,6 +328,10 @@ def toggle_voting():
 
 app.jinja_env.filters['enumerate'] = enumerate
 
+#Fix for Renderdatabase
+with app.app_context():
+    init_db()
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=False,host='0.0.0.0',port=int(os.environ.get('PORT',5000)))
