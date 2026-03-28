@@ -111,7 +111,7 @@ def hash_password(password):
 # ─────────────────────────────────────────
 #  Public Routes
 # ─────────────────────────────────────────
-# Render deployment fix
+
 @app.route('/')
 def home():
     return render_template('home.html')
@@ -330,4 +330,4 @@ app.jinja_env.filters['enumerate'] = enumerate
 
 if __name__ == '__main__':
     init_db()
-    app.run(debug=False,host='0.0.0.0',port=int(os.environ.get('PORT',5000)))
+    app.run(debug=True)
