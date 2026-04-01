@@ -3,10 +3,26 @@ import sqlite3
 import hashlib
 import os
 from functools import wraps
-from datetime import datetime
+from datetime import timedelta
 
 app = Flask(__name__)
-app.secret_key = 'college_voting_secret_key_2024'
+app.secret_key = 'college_voting_secret_key_2026'
+
+def log_activity(action, details='', roll_number='Guest'):
+    try:
+        ip = request.remote_addr
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO activity_log (roll_number, action, details, ip_address) VALUES (?,?,?,?,?)",
+            (roll_number, action, details, ip)
+        )
+        conn.commit()
+        conn.close()
+    except:
+        pass
+
+# Session expires after 1 day
+app.permanent_session_lifetime = timedelta(days=1)
 
 DB_PATH = 'voting.db'
 
@@ -33,6 +49,15 @@ def init_db():
         has_voted INTEGER DEFAULT 0,
         voted_at TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS activity_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        roll_number TEXT,
+        action TEXT NOT NULL,
+        details TEXT,
+        ip_address TEXT,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
 
     c.execute('''CREATE TABLE IF NOT EXISTS candidates (
@@ -143,6 +168,7 @@ def register():
                 (roll, name, dept, email, hash_password(password))
             )
             conn.commit()
+            log_activity('REGISTER', f'New student registered: {roll}', roll)
             return jsonify({'success': True, 'message': 'Registration successful! Please login.'})
         except sqlite3.IntegrityError as e:
             if 'roll_number' in str(e):
@@ -167,19 +193,26 @@ def login():
         conn.close()
 
         if student:
+            session.permanent=True
             session['student_roll'] = student['roll_number']
             session['student_name'] = student['name']
             session['has_voted'] = bool(student['has_voted'])
+            log_activity('LOGIN', f'Student logged in', roll)
             return jsonify({'success': True, 'has_voted': bool(student['has_voted'])})
         else:
+            log_activity('LOGIN_FAILED', f'Failed login attempt: {roll}', roll)
             return jsonify({'success': False, 'message': 'Invalid Roll Number or Password!'})
 
     return render_template('login.html')
 
 @app.route('/logout')
 def logout():
-    session.clear()
-    return redirect(url_for('home'))
+     log_activity('LOGOUT', 'Student logged out', session.get('student_roll', 'Unknown'))
+     session.clear()
+     return redirect(url_for('home'))
+
+
+
 
 # ─────────────────────────────────────────
 #  Voting Routes
@@ -244,6 +277,7 @@ def submit_vote():
         )
         conn.commit()
         session['has_voted'] = True
+        log_activity('VOTE', f'Student voted successfully', roll)
         return jsonify({'success': True})
     except Exception as e:
         conn.rollback()
@@ -276,10 +310,13 @@ def admin_login():
         if admin:
             session['admin_logged_in'] = True
             session['admin_username'] = username
+            log_activity('ADMIN_LOGIN', f'Admin logged in: {username}', 'ADMIN')
             return jsonify({'success': True})
         return jsonify({'success': False, 'message': 'Invalid credentials!'})
 
     return render_template('admin_login.html')
+
+   
 
 @app.route('/admin/logout')
 def admin_logout():
@@ -314,6 +351,16 @@ def admin_results():
                            total_voted=total_voted,
                            turnout=turnout,
                            election_name=settings['election_name'])
+
+@app.route('/admin/activity')
+@admin_required
+def admin_activity():
+    conn = get_db()
+    logs = conn.execute(
+        "SELECT * FROM activity_log ORDER BY timestamp DESC LIMIT 100"
+    ).fetchall()
+    conn.close()
+    return render_template('activity.html', logs=logs)
 
 @app.route('/admin/toggle_voting', methods=['POST'])
 @admin_required
