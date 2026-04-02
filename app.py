@@ -1,30 +1,17 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 import sqlite3
 import hashlib
 import os
 from functools import wraps
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 app = Flask(__name__)
-app.secret_key = 'college_voting_secret_key_2026'
-
-def log_activity(action, details='', roll_number='Guest'):
-    try:
-        ip = request.remote_addr
-        conn = get_db()
-        conn.execute(
-            "INSERT INTO activity_log (roll_number, action, details, ip_address) VALUES (?,?,?,?,?)",
-            (roll_number, action, details, ip)
-        )
-        conn.commit()
-        conn.close()
-    except:
-        pass
+app.secret_key = os.environ.get('SECRET_KEY', 'college_voting_secret_key_2026')
 
 # Session expires after 1 day
 app.permanent_session_lifetime = timedelta(days=1)
 
-DB_PATH = 'voting.db'
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'voting.db')
 
 # ─────────────────────────────────────────
 #  Database Initialization
@@ -51,15 +38,6 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
 
-    c.execute('''CREATE TABLE IF NOT EXISTS activity_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        roll_number TEXT,
-        action TEXT NOT NULL,
-        details TEXT,
-        ip_address TEXT,
-        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
-    )''')
-
     c.execute('''CREATE TABLE IF NOT EXISTS candidates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -69,7 +47,7 @@ def init_db():
         symbol TEXT,
         image TEXT,
         vote_count INTEGER DEFAULT 0,
-        UNIQUE(name,position)
+        UNIQUE(name, position)
     )''')
 
     c.execute('''CREATE TABLE IF NOT EXISTS votes (
@@ -88,8 +66,29 @@ def init_db():
 
     c.execute('''CREATE TABLE IF NOT EXISTS election_settings (
         id INTEGER PRIMARY KEY DEFAULT 1,
-        election_name TEXT DEFAULT 'Student Council Election 2024',
+        election_name TEXT DEFAULT 'Student Council Election 2026',
         voting_open INTEGER DEFAULT 1
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS activity_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        roll_number TEXT,
+        action TEXT NOT NULL,
+        details TEXT,
+        ip_address TEXT,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS student_activity (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        roll_number TEXT NOT NULL,
+        student_name TEXT,
+        department TEXT,
+        action TEXT NOT NULL,
+        page TEXT,
+        details TEXT,
+        ip_address TEXT,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
 
     # Insert default admin
@@ -99,16 +98,57 @@ def init_db():
     # Insert election settings
     c.execute("INSERT OR IGNORE INTO election_settings (id, election_name, voting_open) VALUES (1, 'Student Council Election 2026', 1)")
 
-    # Insert sample candidates
+    # Insert candidates
     candidates = [
-        ('SURIYA', 'President', 'Computer Science', 'I will build a stronger, more connected student community with modern tech initiatives.', '🦁','suriya.jpg.png'),
-        ('SARUGEH', 'President', 'Electronics', 'Empowering every student voice with transparency and actionable change.', '🌟','sarugesh.jpg.jpg'),
-         ]
+        ('SURIYA', 'President', 'Computer Science', 'I will build a stronger, more connected student community with modern tech initiatives.', '🦁', 'suriya.jpg.png'),
+        ('SARUGEH', 'President', 'Electronics', 'Empowering every student voice with transparency and actionable change.', '🌟', 'sarugesh.jpg.jpg'),
+    ]
     for c_data in candidates:
-        conn.execute("INSERT OR IGNORE INTO candidates (name, position, department, manifesto, symbol,image) VALUES (?,?,?,?,?,?)", c_data)
+        c.execute("INSERT OR IGNORE INTO candidates (name, position, department, manifesto, symbol, image) VALUES (?,?,?,?,?,?)", c_data)
 
     conn.commit()
     conn.close()
+
+# ─────────────────────────────────────────
+#  Activity Log Functions
+# ─────────────────────────────────────────
+
+def log_activity(action, details='', roll_number='Guest'):
+    try:
+        ip = request.remote_addr
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO activity_log (roll_number, action, details, ip_address) VALUES (?,?,?,?)",
+            (roll_number, action, details, ip)
+        )
+        conn.commit()
+        conn.close()
+    except:
+        pass
+
+def log_student_activity(action, page, details=''):
+    try:
+        roll = session.get('student_roll', 'Guest')
+        name = session.get('student_name', 'Unknown')
+        ip = request.remote_addr
+        conn = get_db()
+
+        student = conn.execute(
+            "SELECT department FROM students WHERE roll_number=?",
+            (roll,)
+        ).fetchone()
+        dept = student['department'] if student else 'Unknown'
+
+        conn.execute(
+            '''INSERT INTO student_activity
+               (roll_number, student_name, department, action, page, details, ip_address)
+               VALUES (?,?,?,?,?,?,?)''',
+            (roll, name, dept, action, page, details, ip)
+        )
+        conn.commit()
+        conn.close()
+    except:
+        pass
 
 # ─────────────────────────────────────────
 #  Auth Decorators
@@ -136,7 +176,7 @@ def hash_password(password):
 # ─────────────────────────────────────────
 #  Public Routes
 # ─────────────────────────────────────────
-# Render deployment fix
+
 @app.route('/')
 def home():
     return render_template('home.html')
@@ -169,6 +209,7 @@ def register():
             )
             conn.commit()
             log_activity('REGISTER', f'New student registered: {roll}', roll)
+            log_student_activity('REGISTERED', 'Register Page', f'Roll:{roll} Dept:{dept}')
             return jsonify({'success': True, 'message': 'Registration successful! Please login.'})
         except sqlite3.IntegrityError as e:
             if 'roll_number' in str(e):
@@ -193,11 +234,12 @@ def login():
         conn.close()
 
         if student:
-            session.permanent=True
+            session.permanent = True
             session['student_roll'] = student['roll_number']
             session['student_name'] = student['name']
             session['has_voted'] = bool(student['has_voted'])
             log_activity('LOGIN', f'Student logged in', roll)
+            log_student_activity('LOGGED_IN', 'Login Page', f'Roll:{roll}')
             return jsonify({'success': True, 'has_voted': bool(student['has_voted'])})
         else:
             log_activity('LOGIN_FAILED', f'Failed login attempt: {roll}', roll)
@@ -207,12 +249,10 @@ def login():
 
 @app.route('/logout')
 def logout():
-     log_activity('LOGOUT', 'Student logged out', session.get('student_roll', 'Unknown'))
-     session.clear()
-     return redirect(url_for('home'))
-
-
-
+    log_activity('LOGOUT', 'Student logged out', session.get('student_roll', 'Unknown'))
+    log_student_activity('LOGGED_OUT', 'Logout', 'Session ended')
+    session.clear()
+    return redirect(url_for('home'))
 
 # ─────────────────────────────────────────
 #  Voting Routes
@@ -229,13 +269,14 @@ def vote():
     candidates_raw = conn.execute("SELECT * FROM candidates ORDER BY position, name").fetchall()
     conn.close()
 
-    # Group by position
     positions = {}
     for c in candidates_raw:
         pos = c['position']
         if pos not in positions:
             positions[pos] = []
         positions[pos].append(dict(c))
+
+    log_student_activity('VISITED_VOTE_PAGE', 'Vote Page', 'Opened voting page')
 
     return render_template('vote.html',
                            positions=positions,
@@ -249,7 +290,7 @@ def submit_vote():
         return jsonify({'success': False, 'message': 'You have already voted!'})
 
     data = request.get_json()
-    votes = data.get('votes', {})  # {position: candidate_id}
+    votes = data.get('votes', {})
 
     conn = get_db()
     roll = session['student_roll']
@@ -262,6 +303,7 @@ def submit_vote():
 
     try:
         for position, candidate_id in votes.items():
+            candidate_id = int(candidate_id)
             conn.execute(
                 "INSERT INTO votes (roll_number, candidate_id, position) VALUES (?, ?, ?)",
                 (roll, candidate_id, position)
@@ -278,16 +320,19 @@ def submit_vote():
         conn.commit()
         session['has_voted'] = True
         log_activity('VOTE', f'Student voted successfully', roll)
+        log_student_activity('VOTED', 'Vote Page', f'Voted for {len(votes)} positions')
         return jsonify({'success': True})
     except Exception as e:
         conn.rollback()
-        return jsonify({'success': False, 'message': 'Voting failed. Please try again.'})
+        print(f"Vote error: {e}")
+        return jsonify({'success': False, 'message': str(e)})
     finally:
         conn.close()
 
 @app.route('/thank_you')
 @student_required
 def thank_you():
+    log_student_activity('VISITED_THANKYOU', 'Thank You Page', 'Vote confirmed')
     return render_template('thank_you.html', student_name=session['student_name'])
 
 # ─────────────────────────────────────────
@@ -315,8 +360,6 @@ def admin_login():
         return jsonify({'success': False, 'message': 'Invalid credentials!'})
 
     return render_template('admin_login.html')
-
-   
 
 @app.route('/admin/logout')
 def admin_logout():
@@ -362,6 +405,21 @@ def admin_activity():
     conn.close()
     return render_template('activity.html', logs=logs)
 
+@app.route('/admin/students')
+@admin_required
+def admin_students():
+    conn = get_db()
+    students = conn.execute(
+        "SELECT * FROM students ORDER BY created_at DESC"
+    ).fetchall()
+    activities = conn.execute(
+        "SELECT * FROM student_activity ORDER BY timestamp DESC"
+    ).fetchall()
+    conn.close()
+    return render_template('students.html',
+                           students=students,
+                           activities=activities)
+
 @app.route('/admin/toggle_voting', methods=['POST'])
 @admin_required
 def toggle_voting():
@@ -373,12 +431,15 @@ def toggle_voting():
     conn.close()
     return jsonify({'success': True, 'voting_open': bool(new_val)})
 
+# ─────────────────────────────────────────
+#  App Startup
+# ─────────────────────────────────────────
+
 app.jinja_env.filters['enumerate'] = enumerate
 
-#Fix for Renderdatabase
+# Fix for Render database — runs always
 with app.app_context():
     init_db()
 
 if __name__ == '__main__':
-    init_db()
-    app.run(debug=False,host='0.0.0.0',port=int(os.environ.get('PORT',5000)))
+    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
